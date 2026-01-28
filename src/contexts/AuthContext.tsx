@@ -8,6 +8,7 @@ interface AuthContextType {
   session: Session | null;
   profile: Profile | null;
   roles: AppRole[];
+  companyId: string | null;
   loading: boolean;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error: Error | null }>;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
@@ -22,6 +23,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [roles, setRoles] = useState<AppRole[]>([]);
+  const [companyId, setCompanyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchUserData = async (userId: string) => {
@@ -44,6 +46,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     
     if (rolesData) {
       setRoles(rolesData.map(r => r.role as AppRole));
+    }
+
+    // Fetch company ID for company admins/drivers
+    const { data: companyAdminData } = await supabase
+      .from('company_admins')
+      .select('company_id')
+      .eq('user_id', userId)
+      .maybeSingle();
+    
+    if (companyAdminData) {
+      setCompanyId(companyAdminData.company_id);
+    } else {
+      // Check if user is a driver
+      const { data: driverData } = await supabase
+        .from('drivers')
+        .select('company_id')
+        .eq('user_id', userId)
+        .maybeSingle();
+      
+      if (driverData) {
+        setCompanyId(driverData.company_id);
+      }
     }
   };
 
@@ -112,6 +136,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSession(null);
     setProfile(null);
     setRoles([]);
+    setCompanyId(null);
   };
 
   const hasRole = (role: AppRole) => roles.includes(role);
@@ -122,6 +147,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       session,
       profile,
       roles,
+      companyId,
       loading,
       signUp,
       signIn,

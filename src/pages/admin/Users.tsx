@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
   Users, 
   Loader2,
@@ -8,7 +9,9 @@ import {
   Shield,
   Building2,
   Truck,
-  User as UserIcon
+  User as UserIcon,
+  Link as LinkIcon,
+  Unlink
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,8 +29,25 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Label } from '@/components/ui/label';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { useAuth } from '@/contexts/AuthContext';
 import { useToast } from '@/hooks/use-toast';
@@ -40,15 +60,20 @@ interface UserWithRoles {
   phone: string | null;
   created_at: string;
   roles: string[];
+  company_id?: string | null;
+  company_name?: string | null;
 }
 
 export default function AdminUsers() {
   const { user, hasRole, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [users, setUsers] = useState<UserWithRoles[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState('');
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<UserWithRoles | null>(null);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>('');
+  const [assignType, setAssignType] = useState<'company_admin' | 'driver'>('company_admin');
 
   useEffect(() => {
     if (!authLoading) {
@@ -60,14 +85,10 @@ export default function AdminUsers() {
     }
   }, [user, authLoading, hasRole, navigate]);
 
-  useEffect(() => {
-    if (user && hasRole('admin')) {
-      fetchUsers();
-    }
-  }, [user]);
-
-  const fetchUsers = async () => {
-    try {
+  // Fetch users with their roles and company assignments
+  const { data: users = [], isLoading } = useQuery({
+    queryKey: ['admin-users'],
+    queryFn: async () => {
       // Fetch profiles
       const { data: profilesData, error: profilesError } = await supabase
         .from('profiles')
@@ -83,11 +104,28 @@ export default function AdminUsers() {
 
       if (rolesError) throw rolesError;
 
-      // Combine profiles with roles
-      const usersWithRoles = (profilesData || []).map(profile => {
+      // Fetch company admin assignments
+      const { data: companyAdminsData } = await supabase
+        .from('company_admins')
+        .select('user_id, company_id, bus_companies(name)');
+
+      // Fetch driver assignments
+      const { data: driversData } = await supabase
+        .from('drivers')
+        .select('user_id, company_id, bus_companies(name)');
+
+      // Combine profiles with roles and company assignments
+      return (profilesData || []).map(profile => {
         const userRoles = (rolesData || [])
           .filter(r => r.user_id === profile.user_id)
           .map(r => r.role);
+        
+        // Check company admin assignment
+        const companyAdmin = companyAdminsData?.find(ca => ca.user_id === profile.user_id);
+        // Check driver assignment
+        const driver = driversData?.find(d => d.user_id === profile.user_id);
+        
+        const companyAssignment = companyAdmin || driver;
         
         return {
           id: profile.id,
@@ -96,83 +134,150 @@ export default function AdminUsers() {
           phone: profile.phone,
           created_at: profile.created_at,
           roles: userRoles,
+          company_id: companyAssignment?.company_id || null,
+          company_name: (companyAssignment?.bus_companies as any)?.name || null,
         };
       });
+    },
+    enabled: !!user && hasRole('admin'),
+  });
 
-      setUsers(usersWithRoles);
-    } catch (error) {
-      console.error('Error fetching users:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+  // Fetch companies for assignment
+  const { data: companies = [] } = useQuery({
+    queryKey: ['all-companies'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('bus_companies')
+        .select('id, name')
+        .order('name');
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!user && hasRole('admin'),
+  });
 
-  const handleAddRole = async (userId: string, role: 'admin' | 'company_admin' | 'driver' | 'passenger') => {
-    try {
+  const addRoleMutation = useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: 'admin' | 'company_admin' | 'driver' | 'passenger' }) => {
       const { error } = await supabase
         .from('user_roles')
         .insert({ user_id: userId, role });
-
       if (error) throw error;
-
-      setUsers(prev => 
-        prev.map(u => 
-          u.user_id === userId 
-            ? { ...u, roles: [...u.roles, role] }
-            : u
-        )
-      );
-
-      toast({
-        title: 'Role Added',
-        description: `User has been granted ${role} access.`,
-      });
-    } catch (error: any) {
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      toast({ title: 'Role Added', description: 'User role has been updated.' });
+    },
+    onError: (error: any) => {
       if (error.code === '23505') {
-        toast({
-          title: 'Role Exists',
-          description: 'User already has this role.',
-          variant: 'destructive',
-        });
+        toast({ title: 'Role Exists', description: 'User already has this role.', variant: 'destructive' });
       } else {
-        toast({
-          title: 'Error',
-          description: 'Failed to add role.',
-          variant: 'destructive',
-        });
+        toast({ title: 'Error', description: 'Failed to add role.', variant: 'destructive' });
       }
-    }
-  };
+    },
+  });
 
-  const handleRemoveRole = async (userId: string, role: 'admin' | 'company_admin' | 'driver' | 'passenger') => {
-    try {
+  const removeRoleMutation = useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: 'admin' | 'company_admin' | 'driver' | 'passenger' }) => {
       const { error } = await supabase
         .from('user_roles')
         .delete()
         .eq('user_id', userId)
         .eq('role', role);
-
       if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      toast({ title: 'Role Removed', description: 'User role has been removed.' });
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to remove role.', variant: 'destructive' });
+    },
+  });
 
-      setUsers(prev => 
-        prev.map(u => 
-          u.user_id === userId 
-            ? { ...u, roles: u.roles.filter(r => r !== role) }
-            : u
-        )
-      );
+  const assignToCompanyMutation = useMutation({
+    mutationFn: async ({ userId, companyId, type }: { userId: string; companyId: string; type: 'company_admin' | 'driver' }) => {
+      if (type === 'company_admin') {
+        // First add the role if they don't have it
+        const { error: roleError } = await supabase
+          .from('user_roles')
+          .upsert({ user_id: userId, role: 'company_admin' }, { onConflict: 'user_id,role' });
+        
+        if (roleError && roleError.code !== '23505') throw roleError;
 
-      toast({
-        title: 'Role Removed',
-        description: `User no longer has ${role} access.`,
+        // Then assign to company
+        const { error } = await supabase
+          .from('company_admins')
+          .upsert({ user_id: userId, company_id: companyId }, { onConflict: 'user_id' });
+        if (error) throw error;
+      } else {
+        // First add the driver role
+        const { error: roleError } = await supabase
+          .from('user_roles')
+          .upsert({ user_id: userId, role: 'driver' }, { onConflict: 'user_id,role' });
+        
+        if (roleError && roleError.code !== '23505') throw roleError;
+
+        // Then add driver record
+        const { error } = await supabase
+          .from('drivers')
+          .upsert({ user_id: userId, company_id: companyId }, { onConflict: 'user_id' });
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      toast({ 
+        title: 'Assigned to Company', 
+        description: `User has been assigned as ${assignType === 'company_admin' ? 'company admin' : 'driver'}.` 
       });
-    } catch (error) {
-      toast({
-        title: 'Error',
-        description: 'Failed to remove role.',
-        variant: 'destructive',
-      });
-    }
+      setAssignDialogOpen(false);
+      setSelectedUser(null);
+      setSelectedCompanyId('');
+    },
+    onError: (error: any) => {
+      toast({ title: 'Error', description: error.message || 'Failed to assign user.', variant: 'destructive' });
+    },
+  });
+
+  const unlinkFromCompanyMutation = useMutation({
+    mutationFn: async ({ userId, type }: { userId: string; type: 'company_admin' | 'driver' }) => {
+      if (type === 'company_admin') {
+        const { error } = await supabase
+          .from('company_admins')
+          .delete()
+          .eq('user_id', userId);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('drivers')
+          .delete()
+          .eq('user_id', userId);
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-users'] });
+      toast({ title: 'Unlinked', description: 'User has been unlinked from the company.' });
+    },
+    onError: () => {
+      toast({ title: 'Error', description: 'Failed to unlink user.', variant: 'destructive' });
+    },
+  });
+
+  const openAssignDialog = (userItem: UserWithRoles, type: 'company_admin' | 'driver') => {
+    setSelectedUser(userItem);
+    setAssignType(type);
+    setSelectedCompanyId(userItem.company_id || '');
+    setAssignDialogOpen(true);
+  };
+
+  const handleAssign = () => {
+    if (!selectedUser || !selectedCompanyId) return;
+    assignToCompanyMutation.mutate({
+      userId: selectedUser.user_id,
+      companyId: selectedCompanyId,
+      type: assignType,
+    });
   };
 
   const getRoleIcon = (role: string) => {
@@ -201,12 +306,12 @@ export default function AdminUsers() {
     }
   };
 
-  const filteredUsers = users.filter(user =>
-    user.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    user.phone?.includes(searchQuery)
+  const filteredUsers = users.filter(u =>
+    u.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    u.phone?.includes(searchQuery)
   );
 
-  if (authLoading || loading) {
+  if (authLoading || isLoading) {
     return (
       <AdminLayout title="Manage Users">
         <div className="flex items-center justify-center h-64">
@@ -223,7 +328,7 @@ export default function AdminUsers() {
         <div className="relative max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search users..."
+            placeholder="Search users by name or phone..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-10"
@@ -243,6 +348,7 @@ export default function AdminUsers() {
                 <TableHead>User</TableHead>
                 <TableHead>Phone</TableHead>
                 <TableHead>Roles</TableHead>
+                <TableHead>Company</TableHead>
                 <TableHead>Joined</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -271,6 +377,16 @@ export default function AdminUsers() {
                     </div>
                   </TableCell>
                   <TableCell>
+                    {u.company_name ? (
+                      <Badge variant="outline" className="bg-primary/10 text-primary">
+                        <Building2 className="h-3 w-3 mr-1" />
+                        {u.company_name}
+                      </Badge>
+                    ) : (
+                      <span className="text-muted-foreground text-sm">-</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
                     {new Date(u.created_at).toLocaleDateString()}
                   </TableCell>
                   <TableCell className="text-right">
@@ -280,31 +396,88 @@ export default function AdminUsers() {
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
+                      <DropdownMenuContent align="end" className="w-56">
+                        {/* Role Management */}
                         {!u.roles.includes('admin') && (
-                          <DropdownMenuItem onClick={() => handleAddRole(u.user_id, 'admin')}>
+                          <DropdownMenuItem onClick={() => addRoleMutation.mutate({ userId: u.user_id, role: 'admin' })}>
                             <Shield className="mr-2 h-4 w-4" />
-                            Make Admin
+                            Make Super Admin
                           </DropdownMenuItem>
                         )}
-                        {!u.roles.includes('company_admin') && (
-                          <DropdownMenuItem onClick={() => handleAddRole(u.user_id, 'company_admin')}>
+                        
+                        {/* Company Admin Assignment */}
+                        {!u.roles.includes('company_admin') ? (
+                          <DropdownMenuItem onClick={() => openAssignDialog(u, 'company_admin')}>
                             <Building2 className="mr-2 h-4 w-4" />
-                            Make Company Admin
+                            Assign as Company Admin
                           </DropdownMenuItem>
+                        ) : (
+                          <>
+                            <DropdownMenuItem onClick={() => openAssignDialog(u, 'company_admin')}>
+                              <LinkIcon className="mr-2 h-4 w-4" />
+                              {u.company_id ? 'Change Company' : 'Assign to Company'}
+                            </DropdownMenuItem>
+                            {u.company_id && (
+                              <DropdownMenuItem 
+                                onClick={() => unlinkFromCompanyMutation.mutate({ userId: u.user_id, type: 'company_admin' })}
+                                className="text-destructive"
+                              >
+                                <Unlink className="mr-2 h-4 w-4" />
+                                Unlink from Company
+                              </DropdownMenuItem>
+                            )}
+                          </>
                         )}
-                        {!u.roles.includes('driver') && (
-                          <DropdownMenuItem onClick={() => handleAddRole(u.user_id, 'driver')}>
+
+                        {/* Driver Assignment */}
+                        {!u.roles.includes('driver') ? (
+                          <DropdownMenuItem onClick={() => openAssignDialog(u, 'driver')}>
                             <Truck className="mr-2 h-4 w-4" />
-                            Make Driver
+                            Assign as Driver
                           </DropdownMenuItem>
+                        ) : (
+                          <>
+                            <DropdownMenuItem onClick={() => openAssignDialog(u, 'driver')}>
+                              <LinkIcon className="mr-2 h-4 w-4" />
+                              {u.company_id ? 'Change Driver Company' : 'Assign Driver to Company'}
+                            </DropdownMenuItem>
+                            {u.company_id && (
+                              <DropdownMenuItem 
+                                onClick={() => unlinkFromCompanyMutation.mutate({ userId: u.user_id, type: 'driver' })}
+                                className="text-destructive"
+                              >
+                                <Unlink className="mr-2 h-4 w-4" />
+                                Remove Driver Assignment
+                              </DropdownMenuItem>
+                            )}
+                          </>
                         )}
+
+                        <DropdownMenuSeparator />
+
+                        {/* Remove Roles */}
                         {u.roles.includes('admin') && u.user_id !== user?.id && (
                           <DropdownMenuItem 
-                            onClick={() => handleRemoveRole(u.user_id, 'admin')}
+                            onClick={() => removeRoleMutation.mutate({ userId: u.user_id, role: 'admin' })}
                             className="text-destructive"
                           >
-                            Remove Admin
+                            Remove Super Admin
+                          </DropdownMenuItem>
+                        )}
+                        {u.roles.includes('company_admin') && (
+                          <DropdownMenuItem 
+                            onClick={() => removeRoleMutation.mutate({ userId: u.user_id, role: 'company_admin' })}
+                            className="text-destructive"
+                          >
+                            Remove Company Admin Role
+                          </DropdownMenuItem>
+                        )}
+                        {u.roles.includes('driver') && (
+                          <DropdownMenuItem 
+                            onClick={() => removeRoleMutation.mutate({ userId: u.user_id, role: 'driver' })}
+                            className="text-destructive"
+                          >
+                            Remove Driver Role
                           </DropdownMenuItem>
                         )}
                       </DropdownMenuContent>
@@ -323,6 +496,60 @@ export default function AdminUsers() {
           )}
         </CardContent>
       </Card>
+
+      {/* Assign to Company Dialog */}
+      <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Assign {assignType === 'company_admin' ? 'Company Admin' : 'Driver'}
+            </DialogTitle>
+            <DialogDescription>
+              {selectedUser?.full_name ? (
+                <>Assign <strong>{selectedUser.full_name}</strong> to a company</>
+              ) : (
+                'Select a company to assign this user to'
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Select Company</Label>
+              <Select value={selectedCompanyId} onValueChange={setSelectedCompanyId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Choose a company" />
+                </SelectTrigger>
+                <SelectContent>
+                  {companies.map(company => (
+                    <SelectItem key={company.id} value={company.id}>
+                      {company.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {companies.length === 0 && (
+              <p className="text-sm text-muted-foreground">
+                No companies available. Create a company first.
+              </p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAssignDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleAssign} 
+              disabled={!selectedCompanyId || assignToCompanyMutation.isPending}
+            >
+              {assignToCompanyMutation.isPending ? 'Assigning...' : 'Assign'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AdminLayout>
   );
 }
