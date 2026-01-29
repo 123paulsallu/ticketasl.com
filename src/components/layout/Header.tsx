@@ -1,5 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom';
-import { Bus, Menu, User, LogOut, LayoutDashboard, Ticket } from 'lucide-react';
+import { Bus, Menu, User, LogOut, LayoutDashboard, Ticket, Building2, Car } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -73,10 +73,24 @@ export function Header() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuItem onClick={() => navigate(getDashboardLink())}>
-                  <LayoutDashboard className="mr-2 h-4 w-4" />
-                  Dashboard
-                </DropdownMenuItem>
+                {hasRole('admin') && (
+                  <DropdownMenuItem onClick={() => navigate('/admin')}>
+                    <LayoutDashboard className="mr-2 h-4 w-4" />
+                    Admin Dashboard
+                  </DropdownMenuItem>
+                )}
+                {hasRole('company_admin') && (
+                  <DropdownMenuItem onClick={() => navigate('/company')}>
+                    <Building2 className="mr-2 h-4 w-4" />
+                    Company Portal
+                  </DropdownMenuItem>
+                )}
+                {hasRole('driver') && (
+                  <DropdownMenuItem onClick={() => navigate('/driver')}>
+                    <Car className="mr-2 h-4 w-4" />
+                    Driver Portal
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onClick={() => navigate('/my-tickets')}>
                   <Ticket className="mr-2 h-4 w-4" />
                   My Tickets
