@@ -204,11 +204,30 @@ export default function AdminUsers() {
         
         if (roleError && roleError.code !== '23505') throw roleError;
 
-        // Then assign to company
-        const { error } = await supabase
-          .from('company_admins')
-          .upsert({ user_id: userId, company_id: companyId }, { onConflict: 'user_id' });
-        if (error) throw error;
+        // Then assign to company (update existing assignment or insert new)
+        {
+          const { data: existing, error: existingError } = await supabase
+            .from('company_admins')
+            .select('id')
+            .eq('user_id', userId)
+            .limit(1)
+            .maybeSingle();
+
+          if (existingError) throw existingError;
+
+          if (existing) {
+            const { error } = await supabase
+              .from('company_admins')
+              .update({ company_id: companyId })
+              .eq('user_id', userId);
+            if (error) throw error;
+          } else {
+            const { error } = await supabase
+              .from('company_admins')
+              .insert({ user_id: userId, company_id: companyId });
+            if (error) throw error;
+          }
+        }
       } else {
         // First add the driver role
         const { error: roleError } = await supabase
@@ -217,11 +236,30 @@ export default function AdminUsers() {
         
         if (roleError && roleError.code !== '23505') throw roleError;
 
-        // Then add driver record
-        const { error } = await supabase
-          .from('drivers')
-          .upsert({ user_id: userId, company_id: companyId }, { onConflict: 'user_id' });
-        if (error) throw error;
+        // Then add driver record (update existing or insert new)
+        {
+          const { data: existingDriver, error: existingDriverErr } = await supabase
+            .from('drivers')
+            .select('id')
+            .eq('user_id', userId)
+            .limit(1)
+            .maybeSingle();
+
+          if (existingDriverErr) throw existingDriverErr;
+
+          if (existingDriver) {
+            const { error } = await supabase
+              .from('drivers')
+              .update({ company_id: companyId })
+              .eq('user_id', userId);
+            if (error) throw error;
+          } else {
+            const { error } = await supabase
+              .from('drivers')
+              .insert({ user_id: userId, company_id: companyId });
+            if (error) throw error;
+          }
+        }
       }
     },
     onSuccess: () => {
