@@ -532,6 +532,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      decrement_trip_seats: { Args: { p_trip_id: string }; Returns: undefined }
       get_user_company_id: { Args: { _user_id: string }; Returns: string }
       has_role: {
         Args: {
