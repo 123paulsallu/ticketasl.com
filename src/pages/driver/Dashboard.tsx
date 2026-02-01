@@ -1,8 +1,8 @@
 import { Link } from 'react-router-dom';
 import { MainLayout } from '@/components/layout/MainLayout';
-import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Calendar, QrCode } from 'lucide-react';
+import { QrCode } from 'lucide-react';
+import { TodayTrips } from '@/components/driver/TodayTrips';
 
 export default function DriverDashboard() {
   return (
@@ -17,12 +17,7 @@ export default function DriverDashboard() {
             </Link>
           </Button>
         </div>
-        <Card>
-          <CardContent className="p-12 text-center">
-            <Calendar className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-            <p className="text-muted-foreground">Today's trips will appear here.</p>
-          </CardContent>
-        </Card>
+        <TodayTrips />
       </div>
     </MainLayout>
   );
